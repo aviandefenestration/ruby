@@ -1028,7 +1028,7 @@ cont_mark(void *ptr)
             }
         }
     }
-
+    
     RUBY_MARK_LEAVE("cont");
 }
 
@@ -1108,6 +1108,7 @@ rb_fiber_update_self(rb_fiber_t *fiber)
 void
 rb_fiber_mark_self(const rb_fiber_t *fiber)
 {
+    
     if (fiber->cont.self) {
         rb_gc_mark_movable(fiber->cont.self);
     }
@@ -1131,6 +1132,7 @@ fiber_compact(void *ptr)
 static void
 fiber_mark(void *ptr)
 {
+    RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
     rb_fiber_t *fiber = ptr;
     RUBY_MARK_ENTER("cont");
     fiber_verify(fiber);

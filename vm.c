@@ -3210,6 +3210,7 @@ thread_compact(void *ptr)
 static void
 thread_mark(void *ptr)
 {
+    RB_DEBUG_COUNTER_INC(thread_full_stack_scan);
     rb_thread_t *th = ptr;
     RUBY_MARK_ENTER("thread");
     rb_fiber_mark_self(th->ec->fiber_ptr);

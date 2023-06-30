@@ -1854,8 +1854,10 @@ rb_objspace_free(rb_objspace_t *objspace)
     if (is_lazy_sweeping(objspace))
         rb_bug("lazy sweeping underway when freeing object space");
 
-    free(objspace->profile.records);
-    objspace->profile.records = NULL;
+    if (objspace->profile.records) {
+        free(objspace->profile.records);
+        objspace->profile.records = 0;
+    }
 
     if (global_list) {
         struct gc_list *list, *next;
@@ -3553,7 +3555,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         if (RHASH_ST_TABLE_P(obj)) {
             st_table *tab = RHASH_ST_TABLE(obj);
 
-            free(tab->bins);
+            if (tab->bins != NULL) free(tab->bins);
             free(tab->entries);
         }
         break;
@@ -3827,7 +3829,11 @@ objspace_each_objects_ensure(VALUE arg)
 
     for (int i = 0; i < SIZE_POOL_COUNT; i++) {
         struct heap_page **pages = data->pages[i];
-        free(pages);
+        /* pages could be NULL if an error was raised during setup (e.g.
+         * malloc failed due to out of memory). */
+        if (pages) {
+            free(pages);
+        }
     }
 
     return Qnil;
@@ -6406,6 +6412,7 @@ each_location(rb_objspace_t *objspace, register const VALUE *x, register long n,
         v = *x;
         cb(objspace, v);
         x++;
+        //RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 40);
     }
 }
 
@@ -6905,6 +6912,7 @@ gc_aging(rb_objspace_t *objspace, VALUE obj)
     check_rvalue_consistency(obj);
 
     objspace->marked_slots++;
+    RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 40);
 }
 
 NOINLINE(static void gc_mark_ptr(rb_objspace_t *objspace, VALUE obj));
@@ -8134,6 +8142,7 @@ gc_marks_start(rb_objspace_t *objspace, int full_mark)
     /* start marking */
     gc_report(1, objspace, "gc_marks_start: (%s)\n", full_mark ? "full" : "minor");
     gc_mode_transition(objspace, gc_mode_marking);
+    ruby_debug_counter_reset();
 
     if (full_mark) {
         size_t incremental_marking_steps = (objspace->rincgc.pooled_slots / INCREMENTAL_MARK_STEP_ALLOCATIONS) + 1;
@@ -12975,7 +12984,9 @@ gc_profile_clear(VALUE _)
     objspace->profile.size = 0;
     objspace->profile.next_index = 0;
     objspace->profile.current_record = 0;
-    free(p);
+    if (p) {
+        free(p);
+    }
     return Qnil;
 }
 

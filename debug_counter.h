@@ -100,6 +100,15 @@ RB_DEBUG_COUNTER(ccf_opt_block_call)
 RB_DEBUG_COUNTER(ccf_opt_struct_aref)
 RB_DEBUG_COUNTER(ccf_opt_struct_aset)
 RB_DEBUG_COUNTER(ccf_super_method)
+RB_DEBUG_COUNTER(ccf_cfunc_other)
+RB_DEBUG_COUNTER(ccf_cfunc_only_splat)
+RB_DEBUG_COUNTER(ccf_cfunc_only_splat_kw)
+RB_DEBUG_COUNTER(vm_call_cfunc_only_splat)
+RB_DEBUG_COUNTER(vm_call_cfunc_only_splat_kw)
+RB_DEBUG_COUNTER(ccf_iseq_bmethod)
+RB_DEBUG_COUNTER(ccf_noniseq_bmethod)
+RB_DEBUG_COUNTER(ccf_opt_send_complex)
+RB_DEBUG_COUNTER(ccf_opt_send_simple)
 
 /*
  * control frame push counts.
@@ -338,6 +347,11 @@ RB_DEBUG_COUNTER(vm_sync_lock_enter)
 RB_DEBUG_COUNTER(vm_sync_lock_enter_nb)
 RB_DEBUG_COUNTER(vm_sync_lock_enter_cr)
 RB_DEBUG_COUNTER(vm_sync_barrier)
+
+// Fibers
+RB_DEBUG_COUNTER(fiber_full_stack_scan) //number of fiber stacks marked by GC per GC mark
+RB_DEBUG_COUNTER(stack_scan_bytes) //total number of bytes marked by GC per GC mark
+RB_DEBUG_COUNTER(thread_full_stack_scan) //number of times GC has marked a thread stack
 
 /* load (not implemented yet) */
 /*
