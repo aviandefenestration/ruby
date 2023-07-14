@@ -352,7 +352,8 @@ RB_DEBUG_COUNTER(vm_sync_barrier)
 RB_DEBUG_COUNTER(fiber_full_stack_scan) //number of fiber stacks marked by GC per GC mark
 RB_DEBUG_COUNTER(stack_scan_bytes) //total number of bytes marked by GC per GC mark
 RB_DEBUG_COUNTER(thread_full_stack_scan) //number of times GC has marked a thread stack
-
+RB_DEBUG_COUNTER(fiber_machine_stack_locations)
+RB_DEBUG_COUNTER(stack_barrier_met)
 /* load (not implemented yet) */
 /*
 RB_DEBUG_COUNTER(load_files)

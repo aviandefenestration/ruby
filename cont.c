@@ -107,6 +107,11 @@ struct fiber_pool_stack {
 
     // If the stack is allocated, the allocation it came from.
     struct fiber_pool_allocation * allocation;
+
+    // Stack barrier points to some position on stack
+    // that GC cannot go beyond 
+    void * stack_barrier;
+
 };
 
 // A linked list of vacant (unused) stacks.
@@ -686,6 +691,8 @@ fiber_pool_stack_acquire(struct fiber_pool * fiber_pool)
     return vacancy->stack;
 }
 
+void rb_stack_barrier_set(struct fiber_pool_stack * stack, void * destination);
+
 // We advise the operating system that the stack memory pages are no longer being used.
 // This introduce some performance overhead but allows system to relaim memory when there is pressure.
 static inline void
@@ -869,6 +876,9 @@ fiber_initialize_coroutine(rb_fiber_t *fiber, size_t * vm_stack_size)
 
     fiber->context.argument = (void*)fiber;
 
+    //initialize the stack barrier
+    rb_stack_barrier_set(&fiber->stack, (&fiber->stack)->base);
+
     return vm_stack;
 }
 
@@ -991,6 +1001,7 @@ cont_compact(void *ptr)
 static void
 cont_mark(void *ptr)
 {
+    RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
     rb_context_t *cont = ptr;
 
     RUBY_MARK_ENTER("cont");
@@ -1132,13 +1143,14 @@ fiber_compact(void *ptr)
 static void
 fiber_mark(void *ptr)
 {
-    RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
     rb_fiber_t *fiber = ptr;
+    struct fiber_pool_stack *stack = &fiber->stack;
     RUBY_MARK_ENTER("cont");
     fiber_verify(fiber);
     rb_gc_mark_movable(fiber->first_proc);
     if (fiber->prev) rb_fiber_mark_self(fiber->prev);
-    cont_mark(&fiber->cont);
+    if(stack->stack_barrier != stack->current) cont_mark(&fiber->cont);
+    else RB_DEBUG_COUNTER_INC(stack_barrier_met);
     RUBY_MARK_LEAVE("cont");
 }
 
@@ -2665,7 +2677,7 @@ fiber_store(rb_fiber_t *next_fiber, rb_thread_t *th)
     if (FIBER_RESUMED_P(fiber)) fiber_status_set(fiber, FIBER_SUSPENDED);
 
     fiber_status_set(next_fiber, FIBER_RESUMED);
-    fiber_setcontext(next_fiber, fiber);
+    rb_stack_barrier(fiber_setcontext, next_fiber, fiber);
 }
 
 static void
@@ -2719,7 +2731,7 @@ fiber_switch(rb_fiber_t *fiber, int argc, const VALUE *argv, int kw_splat, rb_fi
             cont->argc = -1;
             cont->value = value;
 
-            fiber_setcontext(th->root_fiber, th->ec->fiber_ptr);
+            rb_stack_barrier(fiber_setcontext, th->root_fiber, th->ec->fiber_ptr);
 
             VM_UNREACHABLE(fiber_switch);
         }
@@ -3500,6 +3512,24 @@ Init_Cont(void)
 #endif
 
     rb_provide("fiber.so");
+}
+
+/**********Stack barrier stuff***********/
+
+//allows marking of the stack
+void 
+rb_stack_barrier(void (*yield)(rb_fiber_t *, rb_fiber_t *), rb_fiber_t *new_fiber, rb_fiber_t *old_fiber) {
+    struct fiber_pool_stack * stack = &old_fiber->stack;
+    void * current_stack_barrier = stack->stack_barrier; //save stack barrier
+    stack->stack_barrier = stack->current; //new value of stack barrier is stack pointer
+    yield(new_fiber, old_fiber); //transfer control
+    stack->stack_barrier = current_stack_barrier; //restore the stack barrier
+}
+
+//Set the stack barrier to some location in the stack
+void 
+rb_stack_barrier_set(struct fiber_pool_stack * stack, void * destination) {
+    stack->stack_barrier = destination;
 }
 
 RUBY_SYMBOL_EXPORT_BEGIN
