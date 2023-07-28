@@ -6412,7 +6412,8 @@ each_location(rb_objspace_t *objspace, register const VALUE *x, register long n,
         v = *x;
         cb(objspace, v);
         x++;
-        //RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 40);
+        RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8); //8 bytes per 1 address on a 64-bit machine
+        
     }
 }
 
@@ -14078,4 +14079,14 @@ ruby_xrealloc2(void *ptr, size_t n, size_t new_size)
     ruby_malloc_info_line = __LINE__;
 #endif
     return ruby_xrealloc2_body(ptr, n, new_size);
+}
+
+bool
+rb_gc_is_full_marking(void) {
+    rb_objspace_t *objspace = GET_VM()->objspace;
+    //RB_VM_LOCK_ENTER_NO_BARRIER();
+    return is_full_marking(objspace);
+    //RB_VM_LOCK_LEAVE_NO_BARRIER();
+    //return objspace->flags.during_minor_gc == FALSE;
+    //return true;
 }
