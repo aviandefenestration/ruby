@@ -991,6 +991,7 @@ cont_compact(void *ptr)
 static void
 cont_mark(void *ptr)
 {
+    RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
     rb_context_t *cont = ptr;
 
     RUBY_MARK_ENTER("cont");
@@ -1132,7 +1133,7 @@ fiber_compact(void *ptr)
 static void
 fiber_mark(void *ptr)
 {
-    RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
+    
     rb_fiber_t *fiber = ptr;
     RUBY_MARK_ENTER("cont");
     fiber_verify(fiber);

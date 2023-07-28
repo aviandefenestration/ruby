@@ -6412,7 +6412,7 @@ each_location(rb_objspace_t *objspace, register const VALUE *x, register long n,
         v = *x;
         cb(objspace, v);
         x++;
-        //RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 40);
+        RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8); //8 bytes per 1 address on a 64-bit machine       //RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 40);
     }
 }
 
