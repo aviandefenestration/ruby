@@ -278,6 +278,8 @@ struct rb_fiber_struct {
 
     struct coroutine_context context;
     struct fiber_pool_stack stack;
+
+    struct fiber_record_struct fiber_record;
 };
 
 static struct fiber_pool shared_fiber_pool = {NULL, NULL, 0, 0, 0, 0};
@@ -881,6 +883,7 @@ fiber_initialize_coroutine(rb_fiber_t *fiber, size_t * vm_stack_size)
 
     //initialize the stack barrier
     rb_stack_barrier_set(&(fiber->stack), NULL);
+    fiber_record_init(&fiber->fiber_record, fiber);
 
     return vm_stack;
 }
@@ -1143,12 +1146,11 @@ fiber_compact(void *ptr)
     fiber_verify(fiber);
 } 
 
-typedef void (*cont_mark_func_ptr)(void *);
-
 static void
 fiber_mark(void *ptr)
 {
     rb_fiber_t *fiber = ptr;
+    rb_context_t *cont = &fiber->cont;
     //cont_mark_func_ptr mark_fn_ptr = &cont_mark;
     //static void (*mark_fn)(void *);
     //mark_fn = &cont_mark;
@@ -1159,12 +1161,17 @@ fiber_mark(void *ptr)
     rb_gc_mark_movable(fiber->first_proc);
     if (fiber->prev) rb_fiber_mark_self(fiber->prev);
     //rb_stack_barrier_pass(mark_fn_ptr, &fiber->cont, current_stack_barrier, current_stack_pointer);
-    if (rb_gc_is_full_marking()) {
-        cont_mark(&fiber->cont);
-    } else if (!current_stack_barrier) {
-        cont_mark(&fiber->cont);
+    cont_mark(&fiber->cont);
+    if (!fiber->fiber_record.head) {
+        if (cont->saved_vm_stack.ptr) {
+            fiber_record_add_locations(&fiber->fiber_record, cont->saved_vm_stack.ptr,
+                             cont->saved_vm_stack.ptr + cont->saved_vm_stack.slen + cont->saved_vm_stack.clen);
+        }
+        if (cont->machine.stack && !FIBER_TERMINATED_P(fiber)) {
+            fiber_record_add_locations(&fiber->fiber_record, cont->machine.stack,
+                                     cont->machine.stack + cont->machine.stack_size);
+        }
     }
-    
     //else if (!current_stack_barrier ||  current_stack_barrier != current_stack_pointer) {
         //cont_mark(&fiber->cont);
     //} else RB_DEBUG_COUNTER_INC(stack_barrier_met);
@@ -1183,6 +1190,8 @@ fiber_free(void *ptr)
     if (fiber->cont.saved_ec.local_storage) {
         rb_id_table_free(fiber->cont.saved_ec.local_storage);
     }
+
+    fiber_record_free(&fiber->fiber_record);
 
     cont_free(&fiber->cont);
     RUBY_FREE_LEAVE("fiber");
@@ -3570,6 +3579,17 @@ rb_stack_barrier_set(struct fiber_pool_stack * stack, void * destination) {
     if (stack != NULL) {
         stack->stack_barrier = destination;
     }
+}
+
+void 
+fiber_record_init(struct fiber_record_struct *new_record, void *ptr) 
+{
+    rb_fiber_t *fiber = ptr;
+    new_record->head = NULL;
+    new_record->fiber = fiber;
+    new_record->stack_base = fiber->stack.base;
+    new_record->stack_size = fiber->stack.size;
+    //new_record->tail = NULL;
 }
 
 RUBY_SYMBOL_EXPORT_BEGIN

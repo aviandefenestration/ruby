@@ -14084,9 +14084,82 @@ ruby_xrealloc2(void *ptr, size_t n, size_t new_size)
 bool
 rb_gc_is_full_marking(void) {
     rb_objspace_t *objspace = GET_VM()->objspace;
-    //RB_VM_LOCK_ENTER_NO_BARRIER();
+    RB_VM_LOCK_ENTER_NO_BARRIER();
     return is_full_marking(objspace);
-    //RB_VM_LOCK_LEAVE_NO_BARRIER();
+    RB_VM_LOCK_LEAVE_NO_BARRIER();
     //return objspace->flags.during_minor_gc == FALSE;
     //return true;
 }
+
+void 
+fiber_record_add_locations(struct fiber_record_struct *fiber_record, const VALUE *start, const VALUE *end) 
+{
+    register long n;
+    register VALUE *x = start;
+
+    if (end <= start) return;
+    n = end - start;
+
+    VALUE v;
+    while (n--) {
+        v = *x;
+        if (is_pointer_to_heap(&rb_objspace, (void *)v)) {
+
+            struct fiber_stack_object *new_node = malloc(sizeof(struct fiber_stack_object));
+            new_node->stack_obj = x;
+            new_node->next = NULL;
+
+            if (fiber_record->head) {
+                new_node->next = fiber_record->head;
+                fiber_record->head = new_node;
+            } 
+            else {
+                fiber_record->head = new_node;
+            }
+        //RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8); //8 bytes per 1 address on a 64-bit machine
+        }
+        x++;
+    }
+}
+
+void 
+fiber_record_remove_location(VALUE *location, struct fiber_record_struct *fiber_record) {
+    struct fiber_stack_object *removed;
+    struct fiber_stack_object *current = fiber_record->head;
+    struct fiber_stack_object *previous = fiber_record->head;
+    bool LOCATION_FOUND = FALSE;
+    //assume the list was added in order of the stack?
+    //stack was scanned base to top
+    //so list starts with base, ends with top
+    //stack is first in last out
+    //but is this record used for both VM and machine stack?
+    while (current || !LOCATION_FOUND) {
+        if (current->stack_obj == location) {
+            removed = current;
+            previous = current->next;
+            current->next = NULL;
+            LOCATION_FOUND = TRUE;
+        }
+        else {
+            previous = current;
+            current = current->next;
+        }
+    }
+    removed->stack_obj = NULL;
+    removed->next = NULL;
+    free(removed);
+}
+
+void 
+fiber_record_free(struct fiber_record_struct *fiber_record) {
+    struct fiber_stack_object *current = fiber_record->head;
+    struct fiber_stack_object *removed = fiber_record->head;
+    while (current) {
+        removed = current;
+        current = current->next;
+        removed->stack_obj = NULL;
+        removed->next = NULL;
+        free(removed);
+    }
+}
+

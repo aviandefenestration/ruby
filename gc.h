@@ -128,6 +128,34 @@ size_t rb_size_pool_slot_size(unsigned char pool_id);
 struct rb_execution_context_struct; /* in vm_core.h */
 struct rb_objspace; /* in vm_core.h */
 
+/*Fiber stuff*/
+bool rb_gc_is_full_marking(void);
+struct fiber_stack_object 
+{
+    //a pointer to a object pointer on a fiber stack
+    VALUE *stack_obj;
+    struct fiber_stack_object *next;
+};
+
+struct fiber_record_struct 
+{
+    //the head of a linked list storing pointer values found on a fiber's stack.
+    //any pointers found on the stack are *VALUE type. gc_mark_maybe is given VALUE, which is a pointer to an object
+    struct fiber_stack_object *head;
+
+    rb_fiber_t *fiber;
+
+    void *stack_base;
+    size_t stack_size;
+
+};
+
+void fiber_record_init(struct fiber_record_struct *new_record, void *ptr);
+void fiber_record_add_location(VALUE *location, struct fiber_record_struct *fiber_record);
+void fiber_record_add_locations(struct fiber_record_struct *fiber_record, const VALUE *start, const VALUE *end);
+void fiber_record_free(struct fiber_record_struct *fiber_record);
+
+
 #ifdef NEWOBJ_OF
 # undef NEWOBJ_OF
 # undef RB_NEWOBJ_OF
@@ -231,7 +259,6 @@ int rb_objspace_garbage_object_p(VALUE obj);
 bool rb_gc_is_ptr_to_obj(void *ptr);
 VALUE rb_gc_id2ref_obj_tbl(VALUE objid);
 VALUE rb_define_finalizer_no_check(VALUE obj, VALUE block);
-
 void rb_gc_mark_and_move(VALUE *ptr);
 
 #define rb_gc_mark_and_move_ptr(ptr) do { \
