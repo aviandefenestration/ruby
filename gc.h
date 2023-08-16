@@ -142,6 +142,11 @@ struct fiber_record_struct
     //the head of a linked list storing pointer values found on a fiber's stack.
     //any pointers found on the stack are *VALUE type. gc_mark_maybe is given VALUE, which is a pointer to an object
     struct fiber_stack_object *head;
+    struct fiber_stack_object *tail;
+
+    // Stack barrier points to some position on stack
+    // that GC cannot go beyond 
+    void * stack_barrier;
 
     rb_fiber_t *fiber;
 
@@ -151,10 +156,9 @@ struct fiber_record_struct
 };
 
 void fiber_record_init(struct fiber_record_struct *new_record, void *ptr);
-void fiber_record_add_location(VALUE *location, struct fiber_record_struct *fiber_record);
-void fiber_record_add_locations(struct fiber_record_struct *fiber_record, const VALUE *start, const VALUE *end);
 void fiber_record_free(struct fiber_record_struct *fiber_record);
-
+void fiber_record_mark(struct fiber_record_struct *fiber_record);
+struct fiber_record_struct* get_fiber_record(const rb_execution_context_t* ec);
 
 #ifdef NEWOBJ_OF
 # undef NEWOBJ_OF

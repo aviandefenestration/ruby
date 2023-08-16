@@ -6413,7 +6413,7 @@ each_location(rb_objspace_t *objspace, register const VALUE *x, register long n,
         cb(objspace, v);
         x++;
         RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8); //8 bytes per 1 address on a 64-bit machine
-        
+        RB_DEBUG_COUNTER_INC_IF(stack_object_count, is_pointer_to_heap(objspace, (void *)v));
     }
 }
 
@@ -6756,6 +6756,10 @@ mark_current_machine_context(rb_objspace_t *objspace, rb_execution_context_t *ec
 }
 #endif
 
+void 
+fiber_record(rb_objspace_t *objspace, const rb_execution_context_t *ec, const VALUE *start, const VALUE *end,
+                                    void (*cb)(rb_objspace_t *, VALUE));
+
 static void
 each_machine_stack_value(const rb_execution_context_t *ec, void (*cb)(rb_objspace_t *, VALUE))
 {
@@ -6764,7 +6768,12 @@ each_machine_stack_value(const rb_execution_context_t *ec, void (*cb)(rb_objspac
 
     GET_STACK_BOUNDS(stack_start, stack_end, 0);
     RUBY_DEBUG_LOG("ec->th:%u stack_start:%p stack_end:%p", rb_ec_thread_ptr(ec)->serial, stack_start, stack_end);
-    each_stack_location(objspace, ec, stack_start, stack_end, cb);
+    if (rb_gc_is_full_marking()) {
+        each_stack_location(objspace, ec, stack_start, stack_end, cb);
+    }
+    else {
+        fiber_record(objspace, ec, stack_start, stack_end, cb);
+    }
 }
 
 void
@@ -14091,8 +14100,11 @@ rb_gc_is_full_marking(void) {
     //return true;
 }
 
-void 
-fiber_record_add_locations(struct fiber_record_struct *fiber_record, const VALUE *start, const VALUE *end) 
+//use to create new list
+//use to mark area above stack barrier
+void
+fiber_record_mark_and_add_locations(rb_objspace_t *objspace, struct fiber_record_struct *fiber_record, const VALUE *start, const VALUE *end,
+                        void (*cb)(rb_objspace_t *, VALUE))
 {
     register long n;
     register VALUE *x = start;
@@ -14103,8 +14115,7 @@ fiber_record_add_locations(struct fiber_record_struct *fiber_record, const VALUE
     VALUE v;
     while (n--) {
         v = *x;
-        if (is_pointer_to_heap(&rb_objspace, (void *)v)) {
-
+        if (is_pointer_to_heap(objspace, (void *)v)) {
             struct fiber_stack_object *new_node = malloc(sizeof(struct fiber_stack_object));
             new_node->stack_obj = x;
             new_node->next = NULL;
@@ -14112,14 +14123,93 @@ fiber_record_add_locations(struct fiber_record_struct *fiber_record, const VALUE
             if (fiber_record->head) {
                 new_node->next = fiber_record->head;
                 fiber_record->head = new_node;
+                fiber_record->tail = new_node;
+                RB_DEBUG_COUNTER_INC(stack_object_count);
             } 
             else {
-                fiber_record->head = new_node;
+                fiber_record->tail->next = new_node;
+                fiber_record->tail = fiber_record->tail->next;
+                RB_DEBUG_COUNTER_INC(stack_object_count);
             }
         //RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8); //8 bytes per 1 address on a 64-bit machine
         }
+        cb(objspace, v);
         x++;
     }
+    //if fiber_record->head is above stack barrier then move the stack barrier
+
+}
+
+//mark area below stack barrier
+//remove any list entries that are above the stack barrier
+void
+fiber_record_mark_and_update(rb_objspace_t *objspace, struct fiber_record_struct *fiber_record,
+                            void (*cb)(rb_objspace_t *, VALUE)) 
+{
+    struct fiber_stack_object *current = fiber_record->head;
+    struct fiber_stack_object *prev = fiber_record->head;
+    struct fiber_stack_object *tmp;
+
+    void *current_stack_barrier = fiber_record->stack_barrier;
+
+    while (current) {
+        cb(&rb_objspace, *(current->stack_obj));
+        if (STACK_DIR_UPPER(0, 1)) {
+            //growing high to low. sp < barrier < base
+            if (current->stack_obj < (VALUE *)current_stack_barrier) {
+                prev->next = current->next;
+                tmp = current;
+                current = current->next;
+                tmp->stack_obj = NULL;
+                tmp->next = NULL;
+                free(tmp);
+            }
+        } 
+        else {
+            if (current->stack_obj > (VALUE *)current_stack_barrier) {
+                prev->next = current->next;
+                tmp = current;
+                current = current->next;
+                tmp->stack_obj = NULL;
+                tmp->next = NULL;
+                free(tmp);
+            }
+        }
+        prev = current;
+        current = current->next;
+    }
+}
+
+void 
+fiber_record(rb_objspace_t *objspace, const rb_execution_context_t *ec, const VALUE *start, const VALUE *end,
+                                    void (*cb)(rb_objspace_t *, VALUE)) 
+{
+
+    struct fiber_record_struct *fiber_record = get_fiber_record(ec);
+
+    if (!fiber_record) {
+        RB_DEBUG_COUNTER_INC(no_fiber_record);
+        each_stack_location(objspace, ec, start, end, cb);
+    }
+    else { 
+        if (!fiber_record->head) {
+            //nothing in list
+            fiber_record_mark_and_add_locations(objspace, fiber_record, start, end, cb);
+        }
+        else {
+            //something in list
+            fiber_record_mark_and_add_locations(objspace, fiber_record, start, fiber_record->stack_barrier, cb);
+            fiber_record_mark_and_update(objspace, fiber_record, cb);
+        }
+    }
+
+    //////////////////////deal with this
+        #if defined(__mc68000__)
+            gc_mark_locations(objspace,
+                            (VALUE*)((char*)stack_start + 2),
+                            (VALUE*)((char*)stack_end - 2), cb);
+        #endif
+
 }
 
 void 
@@ -14163,3 +14253,11 @@ fiber_record_free(struct fiber_record_struct *fiber_record) {
     }
 }
 
+void
+fiber_record_mark(struct fiber_record_struct *fiber_record) {
+    struct fiber_stack_object *current = fiber_record->head;
+    while (current) {
+        gc_mark_maybe(&rb_objspace, *(current->stack_obj));
+        current = current->next;
+    }
+}
