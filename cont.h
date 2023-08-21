@@ -29,7 +29,4 @@ VALUE rb_fiberptr_self(struct rb_fiber_struct *fiber);
 unsigned int rb_fiberptr_blocking(struct rb_fiber_struct *fiber);
 struct rb_execution_context_struct * rb_fiberptr_get_ec(struct rb_fiber_struct *fiber);
 
-void rb_stack_barrier(void (*yield)(rb_fiber_t *, rb_fiber_t *), rb_fiber_t *new_fiber, rb_fiber_t *old_fiber);
-
-
 #endif /* INTERNAL_CONT_H */

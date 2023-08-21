@@ -108,7 +108,6 @@ struct fiber_pool_stack {
     // If the stack is allocated, the allocation it came from.
     struct fiber_pool_allocation * allocation;
 
-
 };
 
 // A linked list of vacant (unused) stacks.
@@ -277,6 +276,7 @@ struct rb_fiber_struct {
     struct fiber_pool_stack stack;
 
     struct fiber_record_struct fiber_record;
+
 };
 
 static struct fiber_pool shared_fiber_pool = {NULL, NULL, 0, 0, 0, 0};
@@ -692,8 +692,7 @@ fiber_pool_stack_acquire(struct fiber_pool * fiber_pool)
 
 void rb_stack_barrier_set(struct fiber_record_struct *fiber_record, void * destination);
 void rb_stack_barrier(void (*yield)(rb_fiber_t *, rb_fiber_t *), rb_fiber_t *new_fiber, rb_fiber_t *old_fiber);
-typedef void (*fiber_setcontext_ptr)(rb_fiber_t *, rb_fiber_t *);
-
+void rb_stack_barrier_check(void *ptr);
 
 // We advise the operating system that the stack memory pages are no longer being used.
 // This introduce some performance overhead but allows system to relaim memory when there is pressure.
@@ -878,10 +877,6 @@ fiber_initialize_coroutine(rb_fiber_t *fiber, size_t * vm_stack_size)
 
     fiber->context.argument = (void*)fiber;
 
-    //initialize the stack barrier
-    rb_stack_barrier_set(&(fiber->fiber_record), NULL);
-    //fiber_record_init(&fiber->fiber_record, fiber);
-
     return vm_stack;
 }
 
@@ -1005,46 +1000,15 @@ static void
 cont_mark(void *ptr)
 {
     rb_context_t *cont = ptr;
-
+    RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
     RUBY_MARK_ENTER("cont");
     if (cont->self) {
         rb_gc_mark_movable(cont->self);
     }
     rb_gc_mark_movable(cont->value);
 
-    rb_execution_context_mark(&cont->saved_ec, ((rb_fiber_t*)cont)->fiber_record.stack_barrier);
+    rb_execution_context_mark(&cont->saved_ec);
     rb_gc_mark(cont_thread_value(cont));
-
-    
-    if (cont->machine.stack) {
-        if (cont->type == CONTINUATION_CONTEXT) {
-            /* cont */
-            
-            rb_gc_mark_locations(cont->machine.stack,
-                                 cont->machine.stack + cont->machine.stack_size);
-        }
-        else {
-            /* fiber */
-            
-            const rb_fiber_t *fiber = (rb_fiber_t*)cont;
-
-            if (!FIBER_TERMINATED_P(fiber)) {
-                if (fiber->fiber_record.stack_barrier && !rb_gc_is_full_marking()) {
-                    //mark list
-                    RB_DEBUG_COUNTER_INC(stack_barrier_met);
-                    return;
-                }
-                else
-                    rb_gc_mark_locations(cont->machine.stack,
-                                        cont->machine.stack + cont->machine.stack_size);
-                
-            }
-            RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
-        }
-    }
-    
-
-   
 
     if (cont->saved_vm_stack.ptr) {
 #ifdef CAPTURE_JUST_VALID_VM_STACK
@@ -1056,10 +1020,6 @@ cont_mark(void *ptr)
 #endif
         
     }
-
-    
-
-    
 
     RUBY_MARK_LEAVE("cont");
 }
@@ -1088,6 +1048,7 @@ cont_free(void *ptr)
     }
     else {
         rb_fiber_t *fiber = (rb_fiber_t*)cont;
+        fiber_record_free(&(fiber->fiber_record));
         coroutine_destroy(&fiber->context);
         fiber_stack_release(fiber);
     }
@@ -1144,7 +1105,7 @@ rb_fiber_mark_self(const rb_fiber_t *fiber)
         rb_gc_mark_movable(fiber->cont.self);
     }
     else {
-        rb_execution_context_mark(&fiber->cont.saved_ec, fiber->fiber_record.stack_barrier);
+        rb_execution_context_mark(&fiber->cont.saved_ec);
     }
 }
 
@@ -1164,34 +1125,12 @@ static void
 fiber_mark(void *ptr)
 {
     rb_fiber_t *fiber = ptr;
-    rb_context_t *cont = &fiber->cont;
-    VALUE obj = *(cont->saved_vm_stack.ptr);
     RUBY_MARK_ENTER("cont");
     fiber_verify(fiber);
+    rb_stack_barrier_check(fiber);
     rb_gc_mark_movable(fiber->first_proc);
     if (fiber->prev) rb_fiber_mark_self(fiber->prev);
     cont_mark(&fiber->cont);
-    /*
-    if (fiber->fiber_record.head) {
-        fiber_record_mark(&fiber->fiber_record);
-    } 
-    else {
-        if (cont->saved_vm_stack.ptr) {
-            fiber_record_add_locations(&fiber->fiber_record, cont->saved_vm_stack.ptr,
-                        cont->saved_vm_stack.ptr + cont->saved_vm_stack.slen + cont->saved_vm_stack.clen);
-        }
-        if (cont->machine.stack && !FIBER_TERMINATED_P(fiber)) {
-
-            fiber_record_add_locations(&fiber->fiber_record, cont->machine.stack,
-                        cont->machine.stack + cont->machine.stack_size);
-            RB_DEBUG_COUNTER_INC(fiber_record_add);
-        }
-    }
-    */
-    //else if (!current_stack_barrier ||  current_stack_barrier != current_stack_pointer) {
-        //cont_mark(&fiber->cont);
-    //} else RB_DEBUG_COUNTER_INC(stack_barrier_met);
-    rb_stack_barrier_set(&fiber->fiber_record, fiber->stack.current);
     RUBY_MARK_LEAVE("cont");
 }
 
@@ -1206,8 +1145,6 @@ fiber_free(void *ptr)
     if (fiber->cont.saved_ec.local_storage) {
         rb_id_table_free(fiber->cont.saved_ec.local_storage);
     }
-
-    fiber_record_free(&fiber->fiber_record);
 
     cont_free(&fiber->cont);
     RUBY_FREE_LEAVE("fiber");
@@ -1596,11 +1533,11 @@ NOINLINE(static void fiber_setcontext(rb_fiber_t *new_fiber, rb_fiber_t *old_fib
 static void
 fiber_setcontext(rb_fiber_t *new_fiber, rb_fiber_t *old_fiber)
 {
+    RB_DEBUG_COUNTER_INC(stack_barrier_met);
     rb_thread_t *th = GET_THREAD();
 
     /* save old_fiber's machine stack - to ensure efficient garbage collection */
     if (!FIBER_TERMINATED_P(old_fiber)) {
-        //old_fiber->stack.stack_barrier = old_fiber->stack.current;
         STACK_GROW_DIR_DETECTION;
         SET_MACHINE_STACK_END(&th->ec->machine.stack_end);
         if (STACK_DIR_UPPER(0, 1)) {
@@ -2080,6 +2017,8 @@ fiber_t_alloc(VALUE fiber_value, unsigned int blocking)
 
     DATA_PTR(fiber_value) = fiber;
 
+    fiber_record_init(&fiber->fiber_record, fiber);
+
     return fiber;
 }
 
@@ -2098,6 +2037,8 @@ root_fiber_alloc(rb_thread_t *th)
     fiber->cont.self = fiber_value;
 
     coroutine_initialize_main(&fiber->context);
+
+    fiber_record_init(&fiber->fiber_record, fiber);
 
     return fiber;
 }
@@ -2721,9 +2662,7 @@ fiber_store(rb_fiber_t *next_fiber, rb_thread_t *th)
     if (FIBER_RESUMED_P(fiber)) fiber_status_set(fiber, FIBER_SUSPENDED);
 
     fiber_status_set(next_fiber, FIBER_RESUMED);
-    fiber_setcontext_ptr yield_fn_ptr = &fiber_setcontext;
-    rb_stack_barrier(yield_fn_ptr, next_fiber, fiber);
-    //fiber_setcontext(next_fiber, fiber);
+    rb_stack_barrier(&fiber_setcontext, next_fiber, fiber);
 }
 
 static void
@@ -2777,9 +2716,7 @@ fiber_switch(rb_fiber_t *fiber, int argc, const VALUE *argv, int kw_splat, rb_fi
             cont->argc = -1;
             cont->value = value;
 
-            fiber_setcontext_ptr yield_fn_ptr = &fiber_setcontext;
-            rb_stack_barrier(yield_fn_ptr, th->root_fiber, th->ec->fiber_ptr);
-            //fiber_setcontext(th->root_fiber, th->ec->fiber_ptr);
+            rb_stack_barrier(&fiber_setcontext, th->root_fiber, th->ec->fiber_ptr);
 
             VM_UNREACHABLE(fiber_switch);
         }
@@ -3566,27 +3503,15 @@ Init_Cont(void)
 /**********Stack barrier stuff***********/
 
 /*
-control stack barrier during fiber control transfer. Equivalent to 
-stack barrier stub function for method stack frames.
+modify stack barrier during fiber control transfer
 */
 
 void 
 rb_stack_barrier(void (*yield)(rb_fiber_t *, rb_fiber_t *), rb_fiber_t *new_fiber, rb_fiber_t *old_fiber) {
-    struct fiber_record_struct * fiber_record = &(old_fiber->fiber_record);
-    struct fiber_pool_stack *stack = &old_fiber->stack;
-    fiber_record->stack_barrier = stack->current; //inactive fiber doesn't need to be scanned
+    rb_stack_barrier_set(&(old_fiber->fiber_record), old_fiber->stack.current);
+    rb_stack_barrier_set(&(new_fiber->fiber_record), NULL);
     yield(new_fiber, old_fiber); //transfer control
-    fiber_record = &(new_fiber->fiber_record);
-    fiber_record->stack_barrier = NULL; //scan active fiber
 }
-
-/*
-void
-rb_stack_barrier(rb_fiber_t * fiber) {
-    struct fiber_pool_stack * stack = &(fiber->stack);
-
-}
-*/
 
 
 //Set the stack barrier to some location in the stack
@@ -3595,15 +3520,26 @@ rb_stack_barrier_set(struct fiber_record_struct *fiber_record, void * destinatio
     fiber_record->stack_barrier = destination;
 }
 
+void
+rb_stack_barrier_check(void *ptr) {
+    rb_fiber_t *fiber = ptr;
+    if (FIBER_SUSPENDED_P(fiber)) {
+        fiber->fiber_record.stack_barrier = fiber->stack.current;
+    }
+    else {
+        fiber->fiber_record.stack_barrier = NULL;
+    }
+    RB_DEBUG_COUNTER_INC(stack_barrier_met);
+}
+
 void 
 fiber_record_init(struct fiber_record_struct *new_record, void *ptr) 
 {
     rb_fiber_t *fiber = ptr;
     new_record->head = NULL;
-    new_record->fiber = fiber;
-    new_record->stack_base = fiber->stack.base;
-    new_record->stack_size = fiber->stack.size;
-    //new_record->tail = NULL;
+    new_record->tail = NULL;
+    new_record->fiber = (void *)fiber;
+    new_record->stack_barrier = NULL;
 }
 
 struct fiber_record_struct* get_fiber_record(const rb_execution_context_t* ec) {

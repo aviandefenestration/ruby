@@ -3129,7 +3129,7 @@ mark_local_storage_i(VALUE local, void *data)
 }
 
 void
-rb_execution_context_mark(const rb_execution_context_t *ec, void *stack_barrier)
+rb_execution_context_mark(const rb_execution_context_t *ec)
 {
     /* mark VM stack */
     if (ec->vm_stack) {
@@ -3140,7 +3140,7 @@ rb_execution_context_mark(const rb_execution_context_t *ec, void *stack_barrier)
         rb_control_frame_t *limit_cfp = (void *)(ec->vm_stack + ec->vm_stack_size);
 
         VM_ASSERT(sp == ec->cfp->sp);
-        rb_gc_mark_vm_stack_values((long)(sp - p), p);
+        rb_gc_mark_vm_stack_values((long)(sp - p), p, get_fiber_record(ec));
 
         while (cfp != limit_cfp) {
             const VALUE *ep = cfp->ep;
