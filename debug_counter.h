@@ -354,6 +354,11 @@ RB_DEBUG_COUNTER(stack_scan_bytes) //total number of bytes marked by GC per GC m
 RB_DEBUG_COUNTER(thread_full_stack_scan) //number of times GC has marked a thread stack
 RB_DEBUG_COUNTER(fiber_machine_stack_locations)
 RB_DEBUG_COUNTER(stack_barrier_met)
+RB_DEBUG_COUNTER(stack_object_count)
+RB_DEBUG_COUNTER(no_fiber_record)
+RB_DEBUG_COUNTER(stack_obj_add)
+RB_DEBUG_COUNTER(record_obj_mark)
+RB_DEBUG_COUNTER(stack_obj_remove)
 /* load (not implemented yet) */
 /*
 RB_DEBUG_COUNTER(load_files)

@@ -1000,7 +1000,6 @@ static void
 cont_mark(void *ptr)
 {
     rb_context_t *cont = ptr;
-    RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
     RUBY_MARK_ENTER("cont");
     if (cont->self) {
         rb_gc_mark_movable(cont->self);
@@ -1009,6 +1008,33 @@ cont_mark(void *ptr)
 
     rb_execution_context_mark(&cont->saved_ec);
     rb_gc_mark(cont_thread_value(cont));
+
+    
+    if (cont->machine.stack) {
+        if (cont->type == CONTINUATION_CONTEXT) {
+            /* cont */
+            
+            rb_gc_mark_locations(cont->machine.stack,
+                                 cont->machine.stack + cont->machine.stack_size);
+        }
+        else {
+            /* fiber */
+            
+            const rb_fiber_t *fiber = (rb_fiber_t*)cont;
+
+            if (!FIBER_TERMINATED_P(fiber)) {
+                    //rb_gc_mark_locations(cont->machine.stack,
+                                        //cont->machine.stack + cont->machine.stack_size);
+                    rb_fiber_record_mark(&cont->saved_ec, cont->machine.stack,
+                                        cont->machine.stack + cont->machine.stack_size);
+                
+            }
+            
+        }
+    }
+    
+
+   
 
     if (cont->saved_vm_stack.ptr) {
 #ifdef CAPTURE_JUST_VALID_VM_STACK
@@ -2038,8 +2064,6 @@ root_fiber_alloc(rb_thread_t *th)
 
     coroutine_initialize_main(&fiber->context);
 
-    fiber_record_init(&fiber->fiber_record, fiber);
-
     return fiber;
 }
 
@@ -2662,7 +2686,7 @@ fiber_store(rb_fiber_t *next_fiber, rb_thread_t *th)
     if (FIBER_RESUMED_P(fiber)) fiber_status_set(fiber, FIBER_SUSPENDED);
 
     fiber_status_set(next_fiber, FIBER_RESUMED);
-    rb_stack_barrier(&fiber_setcontext, next_fiber, fiber);
+    rb_stack_barrier(fiber_setcontext, next_fiber, fiber);
 }
 
 static void
@@ -2716,7 +2740,7 @@ fiber_switch(rb_fiber_t *fiber, int argc, const VALUE *argv, int kw_splat, rb_fi
             cont->argc = -1;
             cont->value = value;
 
-            rb_stack_barrier(&fiber_setcontext, th->root_fiber, th->ec->fiber_ptr);
+            rb_stack_barrier(fiber_setcontext, th->root_fiber, th->ec->fiber_ptr);
 
             VM_UNREACHABLE(fiber_switch);
         }

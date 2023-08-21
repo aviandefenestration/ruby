@@ -6413,7 +6413,6 @@ each_location(rb_objspace_t *objspace, register const VALUE *x, register long n,
         cb(objspace, v);
         x++;
         RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8); //8 bytes per 1 address on a 64-bit machine
-        RB_DEBUG_COUNTER_INC_IF(stack_object_count, is_pointer_to_heap(objspace, (void *)v));
     }
 }
 
@@ -6455,7 +6454,7 @@ rb_gc_mark_values(long n, const VALUE *values)
 }
 
 static void
-gc_mark_stack_values(rb_objspace_t *objspace, long n, const VALUE *values, struct fiber_record_struct *fiber_record)
+gc_mark_stack_values(rb_objspace_t *objspace, long n, const VALUE *values)
 {
     long i;
 
@@ -6757,13 +6756,13 @@ mark_current_machine_context(rb_objspace_t *objspace, rb_execution_context_t *ec
 }
 #endif
 
-void
-fiber_record_mark_and_add_locations(rb_objspace_t *objspace, struct fiber_record_struct *fiber_record, const VALUE *start, const VALUE *end,
-                        void (*cb)(rb_objspace_t *, VALUE));
-
 void 
 fiber_record_mark(rb_objspace_t *objspace, const rb_execution_context_t *ec, const VALUE *start, const VALUE *end,
                  void (*cb)(rb_objspace_t *, VALUE));
+
+void
+fiber_record_mark_and_add_locations(rb_objspace_t *objspace, struct fiber_record_struct *fiber_record, const VALUE *start, const VALUE *end,
+                        void (*cb)(rb_objspace_t *, VALUE));
 
 void
 fiber_record_mark_list(rb_objspace_t *objspace, struct fiber_record_struct *fiber_record, void (*cb)(rb_objspace_t *, VALUE));
@@ -14114,7 +14113,7 @@ fiber_record_mark_and_add_locations(rb_objspace_t *objspace, struct fiber_record
     //create dummy object at head
     struct fiber_stack_object *new_node = malloc(sizeof(struct fiber_stack_object));
     if (new_node == NULL) return; //no memory
-    new_node->stack_obj = x;
+    new_node->stack_obj = NULL;
     new_node->next = NULL;
     fiber_record->head = new_node;
 
@@ -14154,7 +14153,6 @@ fiber_record_mark_and_add_locations(rb_objspace_t *objspace, struct fiber_record
                     
                 }
             }
-            RB_DEBUG_COUNTER_INC(stack_object_count);
             RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8); //8 bytes per 1 address on a 64-bit machine
         }
         cb(objspace, v);
@@ -14170,7 +14168,7 @@ fiber_record_mark(rb_objspace_t *objspace, const rb_execution_context_t *ec, con
 
     if (!fiber_record || fiber_record->stack_barrier == NULL) {
         each_stack_location(objspace, ec, start, end, cb);
-        RB_DEBUG_COUNTER_INC(no_fiber_record);
+        RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
             
         if (fiber_record) fiber_record_free(fiber_record);
     }
@@ -14181,6 +14179,7 @@ fiber_record_mark(rb_objspace_t *objspace, const rb_execution_context_t *ec, con
             //inactive with created record
             if (is_full_marking(objspace)) {
                 each_stack_location(objspace, ec, start, end, cb);
+                RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
             }
             else {
                 fiber_record_mark_list(objspace, fiber_record, cb);
@@ -14196,8 +14195,14 @@ fiber_record_mark(rb_objspace_t *objspace, const rb_execution_context_t *ec, con
             #endif
 
             fiber_record_mark_and_add_locations(objspace, fiber_record, stack_start, stack_end, cb);
+            RB_DEBUG_COUNTER_INC(fiber_full_stack_scan);
         }
     }
+}
+
+void rb_fiber_record_mark(const rb_execution_context_t *ec, const VALUE *start, const VALUE *end) {
+    struct fiber_record_struct *fiber_record = get_fiber_record(ec);
+    fiber_record_mark(&rb_objspace, ec, start, end, gc_mark_maybe);
 }
 
 void
@@ -14205,12 +14210,12 @@ fiber_record_mark_list(rb_objspace_t *objspace, struct fiber_record_struct *fibe
     
     if (fiber_record->head == NULL) return;
 
-    struct fiber_stack_object *current = fiber_record->head;
+    struct fiber_stack_object *current = fiber_record->head->next;
     
     while (current != NULL) {
         cb(objspace, *(current->stack_obj));
         current = current->next;
-        RB_DEBUG_COUNTER_INC(record_obj_mark);
+        RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8);
     }
 }
 
