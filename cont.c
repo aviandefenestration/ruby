@@ -692,7 +692,6 @@ fiber_pool_stack_acquire(struct fiber_pool * fiber_pool)
 
 void rb_stack_barrier_set(struct fiber_record_struct *fiber_record, void * destination);
 void rb_stack_barrier(void (*yield)(rb_fiber_t *, rb_fiber_t *), rb_fiber_t *new_fiber, rb_fiber_t *old_fiber);
-void rb_stack_barrier_check(void *ptr);
 
 // We advise the operating system that the stack memory pages are no longer being used.
 // This introduce some performance overhead but allows system to relaim memory when there is pressure.
@@ -1023,8 +1022,6 @@ cont_mark(void *ptr)
             const rb_fiber_t *fiber = (rb_fiber_t*)cont;
 
             if (!FIBER_TERMINATED_P(fiber)) {
-                    //rb_gc_mark_locations(cont->machine.stack,
-                                        //cont->machine.stack + cont->machine.stack_size);
                     rb_fiber_record_mark(&cont->saved_ec, cont->machine.stack,
                                         cont->machine.stack + cont->machine.stack_size);
                 
@@ -1153,7 +1150,6 @@ fiber_mark(void *ptr)
     rb_fiber_t *fiber = ptr;
     RUBY_MARK_ENTER("cont");
     fiber_verify(fiber);
-    rb_stack_barrier_check(fiber);
     rb_gc_mark_movable(fiber->first_proc);
     if (fiber->prev) rb_fiber_mark_self(fiber->prev);
     cont_mark(&fiber->cont);
@@ -1559,7 +1555,6 @@ NOINLINE(static void fiber_setcontext(rb_fiber_t *new_fiber, rb_fiber_t *old_fib
 static void
 fiber_setcontext(rb_fiber_t *new_fiber, rb_fiber_t *old_fiber)
 {
-    RB_DEBUG_COUNTER_INC(stack_barrier_met);
     rb_thread_t *th = GET_THREAD();
 
     /* save old_fiber's machine stack - to ensure efficient garbage collection */
@@ -3544,18 +3539,6 @@ rb_stack_barrier_set(struct fiber_record_struct *fiber_record, void * destinatio
     fiber_record->stack_barrier = destination;
 }
 
-void
-rb_stack_barrier_check(void *ptr) {
-    rb_fiber_t *fiber = ptr;
-    if (FIBER_SUSPENDED_P(fiber)) {
-        fiber->fiber_record.stack_barrier = fiber->stack.current;
-    }
-    else {
-        fiber->fiber_record.stack_barrier = NULL;
-    }
-    RB_DEBUG_COUNTER_INC(stack_barrier_met);
-}
-
 void 
 fiber_record_init(struct fiber_record_struct *new_record, void *ptr) 
 {
@@ -3568,8 +3551,7 @@ fiber_record_init(struct fiber_record_struct *new_record, void *ptr)
 
 struct fiber_record_struct* get_fiber_record(const rb_execution_context_t* ec) {
     rb_fiber_t *fiber = ec->fiber_ptr;
-    if (fiber->cont.type == CONTINUATION_CONTEXT) return NULL;
-    else return &fiber->fiber_record;
+    return &fiber->fiber_record;
 }
 
 RUBY_SYMBOL_EXPORT_BEGIN

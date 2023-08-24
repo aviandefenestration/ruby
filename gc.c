@@ -6777,7 +6777,7 @@ each_machine_stack_value(const rb_execution_context_t *ec, void (*cb)(rb_objspac
     VALUE *stack_start, *stack_end;
     GET_STACK_BOUNDS(stack_start, stack_end, 0);
     RUBY_DEBUG_LOG("ec->th:%u stack_start:%p stack_end:%p", rb_ec_thread_ptr(ec)->serial, stack_start, stack_end);
-    fiber_record_mark(objspace, ec, stack_start, stack_end, cb);
+    each_stack_location(objspace, ec, stack_start, stack_end, cb);
 }
 
 void
@@ -14116,6 +14116,7 @@ fiber_record_mark_and_add_locations(rb_objspace_t *objspace, struct fiber_record
     new_node->stack_obj = NULL;
     new_node->next = NULL;
     fiber_record->head = new_node;
+    //RB_DEBUG_COUNTER_INC(stack_obj_add);
 
     VALUE v;
     while (n--) {
@@ -14153,10 +14154,12 @@ fiber_record_mark_and_add_locations(rb_objspace_t *objspace, struct fiber_record
                     
                 }
             }
-            RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8); //8 bytes per 1 address on a 64-bit machine
+             //8 bytes per 1 address on a 64-bit machine
+            //RB_DEBUG_COUNTER_INC(stack_obj_add);
         }
         cb(objspace, v);
         x++;
+        RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8);
     }
 }
 
@@ -14211,11 +14214,14 @@ fiber_record_mark_list(rb_objspace_t *objspace, struct fiber_record_struct *fibe
     if (fiber_record->head == NULL) return;
 
     struct fiber_stack_object *current = fiber_record->head->next;
+
+    //RB_DEBUG_COUNTER_INC(record_obj_mark);
     
     while (current != NULL) {
         cb(objspace, *(current->stack_obj));
         current = current->next;
         RB_DEBUG_COUNTER_ADD(stack_scan_bytes, 8);
+        //RB_DEBUG_COUNTER_INC(record_obj_mark);
     }
 }
 
